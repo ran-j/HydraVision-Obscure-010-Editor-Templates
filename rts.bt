@@ -1,0 +1,24 @@
+//------------------------------------------------
+//--- 010 Editor v13.0.1 Binary Template
+//
+//      File: 
+//   Authors: Ran-j
+//   Version: 1.0
+//   Purpose: Parse *.rts files in Obscure 1
+//  Category: HydraVision
+// File Mask: *.rts
+//  ID Bytes: 
+//   History: 
+//------------------------------------------------
+LittleEndian(); 
+
+struct Vector4 {
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+while( !FEof() ) {
+    Vector4 row;
+}

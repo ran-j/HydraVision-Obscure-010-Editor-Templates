@@ -1,0 +1,40 @@
+//------------------------------------------------
+//--- 010 Editor v14.0 Binary Template
+//
+//      File: 
+//   Authors: Ran-j
+//   Version: 1.0
+//   Purpose: Parse .coa files in Obscure 1
+//  Category: HydraVision
+// File Mask: *.coa
+//  ID Bytes: 
+//   History: 
+//------------------------------------------------
+// Maybe this is lighting/color configuration (Ambient/Directional?).
+
+BigEndian();
+
+typedef struct {
+    float r;
+    float g;
+    float b;
+} Color3F <read=ReadColor3F>;
+
+string ReadColor3F(Color3F &c) {
+    string s;
+    SPrintf(s, "(%.2f, %.2f, %.2f)", c.r, c.g, c.b);
+    return s;
+}
+
+uint zero;
+uint count; // Type?
+
+struct {
+    uint id;
+    Color3F color;
+} entry1;
+
+struct {
+    uint id;
+    Color3F color;
+} entry2;

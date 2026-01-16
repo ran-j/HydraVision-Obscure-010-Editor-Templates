@@ -1,34 +1,607 @@
 //------------------------------------------------
-//--- 010 Editor v15.0 Binary Template
+//--- 010 Editor v13.0.1 Binary Template
 //
 //      File: 
-//   Authors: 
-//   Version: 
-//   Purpose: 
-//  Category: 
-// File Mask: 
+//   Authors: Ran-j
+//   Version: 1.0
+//   Purpose: Parse *.hoe files in Obscure 1
+//  Category: HydraVision
+// File Mask: *.hoe
 //  ID Bytes: 
 //   History: 
 //------------------------------------------------
-BigEndian();
-while (!FEof())
+BigEndian(); 
+
+// Helpers 
+void Align4()
 {
+    local int m = FTell() & 3;
+    if (m) FSkip(4 - m);
+}
+
+uint MinU(uint a, uint b)
+{
+    if (a < b) return a;
+    return b;
+}
+
+uint Min3U(uint a, uint b, uint c)
+{
+    return MinU(MinU(a, b), c);
+}
+
+int IsAsciiPrintable(uint pos, uint len)
+{
+    local uint i;
+    local ubyte ch;
+
+    if (pos + len > FileSize()) return 0;
+
+    for (i = 0; i < len; i++)
+    {
+        ch = ReadUByte(pos + i);
+        if (ch < 0x20 || ch > 0x7E) return 0;
+    }
+    return 1;
+}
+
+int IsLikelyVmTokenU32(uint u)
+{
+    if (u == 0x000000C9 || u == 0x000000CA || u == 0x000000D0 ||
+        u == 0x00000065 || u == 0x00000066 || u == 0x00000067)
+        return 1;
+
+    return 0;
+}
+
+// Common types 
+typedef union
+{
+    uint  u;
+    float f;
+} U32F32;
+
+// BE length-prefixed string (u32 len + bytes, no NUL)
+typedef struct
+{
+    uint len;
+    char text[len];
+} BeString;
+
+typedef struct
+{
+    uint zero0;
+    uint groupCount;
+    uint zero1;
+    uint zero2;
+    uint stringCount;
+} SharedHeaderLE;
+
+typedef struct
+{
+    ubyte len;
+    char  text[len];
+    ubyte pad3[3];
+} SharedName;
+
+typedef struct
+{
+    uint  pairCount;
+    uint  unkA;
+    uint  unkB;
+    ubyte flags;
+} ValuePairsHeaderLE;
+
+typedef struct
+{
+    uint value;   // BE
+    uint nameId;  // BE
+} ValuePairBE;
+
+typedef struct
+{
+    local uint  pos   = FTell();
+    local uint  len32 = ReadUInt(pos);
+    local ubyte len8  = ReadUByte(pos);
+
+    if (len32 > 0 && len32 < 0x200 && IsAsciiPrintable(pos + 4, len32))
+    {
+        BeString s32;
+    }
+    else if (len8 > 0 && len8 < 0x80 && IsAsciiPrintable(pos + 1, len8))
+    {
+        SharedName s8;
+    }
+    else
+    {
+        uint raw;
+    }
+} TagString;
+
+// Music event marker + parser
+int IsBeLenStringEq(uint pos, string s)
+{
+    local uint len = ReadUInt(pos);
+    if (len != Strlen(s))
+        return 0;
+
+    local string t = ReadString(pos + 4, len);
+    return (t == s);
+}
+
+uint BeLenStringSize(uint pos)
+{
+    return 4 + ReadUInt(pos);
+}
+
+int IsMusicEventMarker(uint pos)
+{
+    if (!IsBeLenStringEq(pos, "music"))
+        return 0;
+
+    local uint pos2 = pos + BeLenStringSize(pos); // NOT aligned
+    return IsBeLenStringEq(pos2, "event");
+}
+
+typedef struct
+{
+    BeString tag0;       
+    BeString tag1;       
+    BeString eventPath;  
+
+    uint eventFlags;
+    uint eventParamA;
+    uint eventParamB;
+
+    BeString scriptName; 
+
+    uint postFlag2;
+    uint postUnkC;
+    uint postFlag3;
+
+    TagString groupName;
+} MusicEventBlock;
+
+// Chunk5 VM token stream helpers 
+string VmTokName(uint tok)
+{
+    switch (tok)
+    {
+        case 0xC9: return "C9 (BlockStart)";
+        case 0xCA: return "CA (Sep/Marker)";
+        case 0xD0: return "D0 (Sep/End)";
+        case 0x65: return "65 (Op65)";
+        case 0x66: return "66 (Op66)";
+        case 0x67: return "67 (Op67)";
+        default:   return Str("0x%02X", tok);
+    }
+}
+
+int TryDecodePaddedByte(uint v, uint &outTok, uint &outShift)
+{
+    if ((v & 0xFFFFFF00) == 0) { outTok = (v & 0xFF);       outShift = 0;  return 1; }
+    if ((v & 0xFFFF00FF) == 0) { outTok = (v >> 8) & 0xFF;  outShift = 8;  return 1; }
+    if ((v & 0xFF00FFFF) == 0) { outTok = (v >> 16) & 0xFF; outShift = 16; return 1; }
+    if ((v & 0x00FFFFFF) == 0) { outTok = (v >> 24) & 0xFF; outShift = 24; return 1; }
+    return 0;
+}
+
+string VmWordToStr(uint v)
+{
+    local uint tok, shift;
+    if (TryDecodePaddedByte(v, tok, shift))
+        return Str("%s (shift %u)", VmTokName(tok), shift);
+
+    return Str("0x%08X (%u)", v, v);
+}
+
+typedef struct
+{
+    uint v <read=VmWordToStr>;
+} VmWord;
+
+// VM patterns 
+int IsFuncDescStart(uint pos)
+{
+    if (pos + 16 > FileSize()) return 0;
+
+    return (ReadUInt(pos)      == 0x000000C9 &&
+            ReadUInt(pos + 4)  == 0x00000000 &&
+            ReadUInt(pos + 8)  == 0x00000065 &&
+            ReadUInt(pos + 12) == 0x00000004);
+}
+
+int IsStandaloneFuncRefStart(uint pos, uint endPos)
+{
+    local uint nameLen;
+    local uint argCount;
+    local uint afterNamePos;
+
+    if (pos + 16 > endPos) return 0;
+
+    if (ReadUInt(pos) != 0x00000065) return 0;
+    if (ReadUInt(pos + 4) != 0x00000004) return 0;
+
+    // Exclude funcdesc embedded ref (preceded by C9 0)
+    if (pos >= 8 &&
+        ReadUInt(pos - 8) == 0x000000C9 &&
+        ReadUInt(pos - 4) == 0x00000000)
+    {
+        return 0;
+    }
+
+    nameLen = ReadUInt(pos + 8);
+    if (nameLen == 0 || nameLen >= 0x200) return 0;
+    if (!IsAsciiPrintable(pos + 12, nameLen)) return 0;
+
+    afterNamePos = pos + 12 + nameLen;
+    if (afterNamePos + 4 > endPos) return 0;
+
+    argCount = ReadUInt(afterNamePos);
+    if (argCount > 0x80) return 0;
+
+    if (afterNamePos + 4 + argCount > endPos) return 0;
+
+    return 1;
+}
+
+uint FindNextFuncDescStart(uint startPos, uint endPos)
+{
+    local uint pos;
+    for (pos = startPos; pos + 16 <= endPos; pos++)
+    {
+        if (IsFuncDescStart(pos))
+            return pos;
+    }
+    return endPos;
+}
+
+uint FindNextMusicEventMarker(uint startPos, uint endPos)
+{
+    local uint pos;
+    for (pos = startPos; pos + 18 <= endPos; pos++)
+    {
+        if (IsMusicEventMarker(pos))
+            return pos;
+    }
+    return endPos;
+}
+
+uint FindNextStandaloneFuncRefStart(uint startPos, uint endPos)
+{
+    local uint pos;
+    for (pos = startPos; pos + 16 <= endPos; pos++)
+    {
+        if (IsStandaloneFuncRefStart(pos, endPos))
+            return pos;
+    }
+    return endPos;
+}
+
+uint FindVmStart(uint startPos, uint endPos)
+{
+    local uint a = FindNextFuncDescStart(startPos, endPos);
+    local uint b = FindNextStandaloneFuncRefStart(startPos, endPos);
+    return MinU(a, b);
+}
+
+// VM structures what I got until now
+typedef struct
+{
+    uint op65      <read=VmWordToStr>;
+    uint kind      <read=VmWordToStr>;
+
+    uint nameLen;
+    char name[nameLen];
+
+    uint argCount;
+    if (argCount > 0)
+    {
+        ubyte argTags[argCount];
+    }
+} VmFuncRef;
+
+// global like VM end marker
+local uint g_vmEnd = 0;
+
+typedef struct
+{
+    uint tokC9     <read=VmWordToStr>;
+    uint zero0;
+
+    VmFuncRef ref;
+
+    local uint metaStart = FTell();
+    local uint nextFn    = FindNextFuncDescStart(metaStart, g_vmEnd);
+    local uint nextEv    = FindNextMusicEventMarker(metaStart, g_vmEnd);
+    local uint nextRef   = FindNextStandaloneFuncRefStart(metaStart, g_vmEnd);
+    local uint boundary  = Min3U(nextFn, nextEv, nextRef);
+
+    while (FTell() + 4 <= boundary)
+    {
+        VmWord metaWord;
+    }
+
+    if (FTell() < boundary)
+        FSeek(boundary);
+
+} VmFuncDesc;
+
+typedef struct
+{
+    VmFuncRef ref;
+} VmStandaloneFuncRef;
+
+typedef struct
+{
+    local uint cur;
+    local uint nextFn2;
+    local uint nextEv2;
+    local uint nextRf2;
+    local uint boundary;
+
+    while (FTell() < g_vmEnd)
+    {
+        if (IsMusicEventMarker(FTell()))
+        {
+            MusicEventBlock ev;
+            continue;
+        }
+
+        if (IsFuncDescStart(FTell()))
+        {
+            VmFuncDesc fn;
+            continue;
+        }
+
+        if (IsStandaloneFuncRefStart(FTell(), g_vmEnd))
+        {
+            VmStandaloneFuncRef rf;
+            continue;
+        }
+
+        cur      = FTell();
+        nextFn2  = FindNextFuncDescStart(cur + 1, g_vmEnd);
+        nextEv2  = FindNextMusicEventMarker(cur + 1, g_vmEnd);
+        nextRf2  = FindNextStandaloneFuncRefStart(cur + 1, g_vmEnd);
+        boundary = Min3U(nextFn2, nextEv2, nextRf2);
+
+        if (boundary <= cur || boundary == g_vmEnd)
+        {
+            if (FTell() + 4 <= g_vmEnd)
+            {
+                VmWord rawWord;
+                continue;
+            }
+            break;
+        }
+
+        while (FTell() + 4 <= boundary)
+        {
+            VmWord rawWord;
+        }
+
+        if (FTell() < boundary)
+            FSeek(boundary);
+    }
+} VmTokenStream;
+
+// chunkId=2 (sized chunk) — preload/deps blob
+typedef struct
+{
+    uint tagA;
+    uint tagB;
+    uint id;
+    uint flags;
+} HoeChunk2Record;
+
+typedef struct
+{
+    uint w0;
+    uint w4;
+    uint w8;
+    uint wC;
+    uint w10;
+    uint w14;
+    uint w18;
+} HoeChunk2TailBlock;
+
+typedef struct
+{
+    local uint start = FTell();
     uint size;
-    float a;
-    uint b;
-    uint entityType;
-    if (entityType == 2)
+    uint flags;
+    local uint endPos = start + size;
+
+    if ((flags & 1) != 0)
+    {
+        BeString name;
+    }
+
+    if (FTell() + 32 <= endPos)
+    {
+        uint  gridMarker;   // 0x69 in m003 (nav/grid marker)
+        float cellSizeX;    // 20.0 in m003
+        float cellSizeY;    // 20.0 in m003
+        float cellSizeZ;    // 100.0 in m003
+        uint  layerCount;   // 2 in m003 (possible grid layer count)
+        uint  unkB;
+        uint  recordCount;  // 16100 = 230*70 in m003
+        uint  unkC;
+ 
+        local uint toParse = MinU(recordCount, (uint)128);
+
+        if (recordCount > 0 &&
+            recordCount < 200000 &&
+            FTell() + toParse * 16 <= endPos)
         {
-            Printf("entity type 2\n");
+            HoeChunk2Record records[toParse];
+
+            if (recordCount > toParse)
+            {
+                local uint remainBytes = (recordCount - toParse) * 16;
+                if (FTell() + remainBytes <= endPos)
+                    FSkip(remainBytes);
             }
-    if (entityType == 1)
+
+            local uint tailBlockCount = (layerCount > 0) ? layerCount * 2 : 0;
+
+            local uint tailReqSize = 4 * 2 + 4 * 2 + 6 * 4 + tailBlockCount * 7 * 4;
+
+            if (FTell() + tailReqSize <= endPos)
+            {
+                uint   gridWidth;      
+                U32F32 gridHeightOrPad;
+                float  originX;        
+                float  originZ;        
+                float  boundsMin[3];   
+                float  boundsMax[3];   
+                
+                if (tailBlockCount > 0)
+                    HoeChunk2TailBlock tailBlocks[tailBlockCount];
+            }
+        }
+    }
+
+    if (FTell() < endPos)
+        FSeek(endPos);
+} HoeChunk2;
+
+// chunkId=5 — locals helper types
+typedef struct
+{
+    ushort len16;
+    char   text[len16];
+    ubyte  nul;
+    Align4();
+} NameU16Z;
+
+// Per-entry auto locals parser
+typedef struct (uint count)
+{
+    local uint idx = 0;
+    
+    local uint pos;
+    local uint l32;
+    local ushort l16;
+    while (idx < count)
+    {
+        pos = FTell();
+        l32 = ReadUInt(pos);
+        l16 = ReadUShort(pos);
+
+        if (l32 > 0 && l32 < 0x200 && IsAsciiPrintable(pos + 4, l32))
         {
-            uint scriptSize;
-            byte data[scriptSize - 4];
-            }
-    if (entityType == 5)
+            BeString locals32;
+        } 
+        else if (l16 > 0 && l16 < 0x200 &&
+                 IsAsciiPrintable(pos + 2, l16) &&
+                 ReadUByte(pos + 2 + l16) == 0x00)
         {
-            uint scriptSize;
-            byte data[scriptSize - 4];
-            }
+            NameU16Z locals16;
+        }
+        else
+        {
+            // Fallback I think I got all path covered but who knows.
+            uint localRaw;
+        }
+
+        idx++;
+    }
+} LocalsAuto;
+
+typedef struct (uint chunkEnd)
+{
+    ushort hdrZero0;      
+    ushort hdrZero1;       
+    ushort varCount;       
+    ushort unk0;
+    ushort scriptKind;     
+    ushort unk1;
+    ushort unk2;
+    ushort unk3;
+
+    ushort localsCountDup;
+
+    local uint localsCount = varCount;
+    if (localsCountDup > localsCount && localsCountDup < 0x400)
+        localsCount = localsCountDup;
+
+    LocalsAuto locals(localsCount);
+
+    while (FTell() + 4 <= chunkEnd && !IsLikelyVmTokenU32(ReadUInt(FTell())))
+    {
+        uint p;
+    }
+} HoeEventScriptPrelude;
+
+// chunkId=5 — two shapes
+typedef struct (uint chunkEnd)
+{
+    U32F32 chunkMagic;
+
+    uint   entityNameLen;
+    char   entityName[entityNameLen];
+    Align4();
+
+    local uint afterNamePos = FTell();
+    local uint leGroupCount;
+    local uint leStringCount;
+
+    LittleEndian();
+    leGroupCount  = ReadUInt(afterNamePos + 4);
+    leStringCount = ReadUInt(afterNamePos + 16);
+    BigEndian();
+
+    if (leGroupCount <= 64 && leStringCount <= 1024)
+    {
+        LittleEndian();
+        SharedHeaderLE sharedHeader;
+        SharedName     stringTable[sharedHeader.stringCount] <optimize=false> ;
+        ValuePairsHeaderLE vpHeader;
+
+        BigEndian();
+        ValuePairBE pairs[vpHeader.pairCount];
+    }
+    else
+    {
+        HoeEventScriptPrelude prelude(chunkEnd);
+    }
+
+    BigEndian();
+    g_vmEnd = chunkEnd;
+
+    local uint vmStart = FindVmStart(FTell(), g_vmEnd);
+    if (vmStart < g_vmEnd)
+        FSeek(vmStart);
+
+    VmTokenStream vm <name="VmTokenStream">;
+
+    if (FTell() < chunkEnd)
+        FSeek(chunkEnd);
+
+} HoeChunk5;
+
+float formatVersion;
+
+while (FTell() + 4 <= FileSize())
+{
+    uint chunkId;
+
+    if (chunkId == 4)
+        break;
+
+    if (chunkId == 2)
+    {
+        HoeChunk2 chunk2;
+        continue;
+    }
+
+    if (chunkId == 5)
+    {
+        local uint chunkEnd = FileSize() - 4;
+        HoeChunk5 chunk5(chunkEnd);
+        continue;
+    }
+    break;
 }
