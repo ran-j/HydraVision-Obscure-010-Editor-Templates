@@ -1,0 +1,156 @@
+//------------------------------------------------
+//--- 010 Editor v13.0.1 Binary Template
+//
+//      File: 
+//   Authors: Ran-j
+//   Version: 1.0
+//   Purpose: Parse *.tm files in Obscure 1
+//  Category: HydraVision
+// File Mask: *.tm
+//  ID Bytes: 
+//   History: 
+//------------------------------------------------
+// WIP
+// Structure on m003_d.tm (version 4) and m003_n.tm (version 5). (maybe is type ?)
+// Format: Type (4) + Size (4) + Payload (Size-4).
+// Chunk alignment: 8 bytes.
+
+BigEndian();
+
+local uint gFileSize = FileSize();
+
+typedef struct
+{
+    float x;
+    float y;
+    float z;
+    uint  flags; // or padding
+} Chunk6Point;
+
+typedef struct
+{
+    float x;
+    float y;
+    float z;     
+    float w_norm;
+    float u_norm;
+    float v_norm;
+} Entry6Floats <read=ReadEntry6>;
+
+string ReadEntry6(Entry6Floats &e) {
+    string s;
+    SPrintf(s, "(%.1f, %.1f, %.1f)", e.x, e.y, e.z);
+    return s;
+}
+
+typedef struct (uint payloadLen)
+{
+    uint id;
+    uint count;
+    
+    local uint expectedData = count * 24;
+    if (expectedData + 8 <= payloadLen) {
+        Entry6Floats entries[count]; 
+
+        if (expectedData + 8 < payloadLen) {
+            ubyte padding[payloadLen - (expectedData + 8)];
+        }
+    } else {
+        ubyte raw[payloadLen - 8];
+    }
+} Chunk4Table;
+
+typedef struct (uint payloadLen)
+{
+    float pos[3];
+    float rotMat3x3[9]; // 3x3 flattened
+    
+    local uint floatsRead = 12;
+    local uint bytesRead = floatsRead * 4;
+    local uint remainingBytes = (payloadLen > bytesRead) ? (payloadLen - bytesRead) : 0;
+    local uint remainingFloats = remainingBytes / 4;
+
+    // this name a pure guess (ChatGPT help dig this)
+    if (remainingFloats >= 31)
+    {
+        // Based on analysis of m003_d.tm (Size 176 chunks)
+        float angles[6];
+        float ranges[6];
+        float unkGap1;
+        float targetPos[3];
+        float unkGap2;
+        float flags[7];
+        float unkGap3;
+        float extents[3];
+        float unkGap4[2];
+        float paddingZero;
+    }
+    else if (remainingBytes > 0)
+    {
+        float extraParams[remainingFloats];
+    }
+} Chunk1Node;
+
+typedef struct
+{
+    uint type;
+    uint size; // Includes itself (4) + payload
+    
+    local uint payloadSize = (size >= 4) ? size - 4 : 0;
+    
+    // HACKKK or the script will break
+    if (FTell() + payloadSize > gFileSize) {
+        Printf("Warning: Chunk Type %d at offset %LX claims size %d, but file ends. Truncating payload.\n", type, FTell()-8, size);
+        payloadSize = (uint)(gFileSize - FTell());
+    }
+    
+    if (payloadSize > 0) {
+        local int64 endPos = FTell() + payloadSize;
+        
+        switch (type) {
+            case 1:
+                Chunk1Node c1(payloadSize);
+                break;
+            case 4:
+                Chunk4Table c4(payloadSize);
+                break;
+            case 6:
+                if (payloadSize == 16) {
+                    Chunk6Point c6;
+                } else {
+                    ubyte payload[payloadSize];
+                }
+                break;
+            default:
+                ubyte payload[payloadSize];
+                break;
+        }
+
+        if (FTell() != endPos) {
+            FSeek(endPos);
+        }
+    }
+     
+    local int64 currentPos = FTell();
+    local int padding = (8 - (currentPos % 8)) % 8;
+    if (padding > 0) {
+        if (currentPos + padding <= gFileSize) {
+            ubyte alignPad[padding];
+        } else {
+            // EOF reached inside padding
+            FSkip(gFileSize - currentPos);
+        }
+    }
+
+} TMChunk <read=ReadTMChunk>;
+
+string ReadTMChunk(TMChunk &c) {
+    string s;
+    SPrintf(s, "Type %d (Sz %d)", c.type, c.size);
+    return s;
+}
+
+ uint version;
+while (FTell() < gFileSize) {
+    TMChunk chunk;
+}

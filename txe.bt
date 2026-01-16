@@ -1,0 +1,29 @@
+//------------------------------------------------
+//--- 010 Editor v13.0.1 Binary Template
+//
+//      File: 
+//   Authors: Ran-j
+//   Version: 1.0
+//   Purpose: Parse *.txe files in Obscure 1
+//  Category: HydraVision
+// File Mask: *.txe
+//  ID Bytes: 
+//   History: 
+//------------------------------------------------
+
+LittleEndian();
+
+typedef struct
+{
+    uint a;
+    uint b;
+    uint c;
+    uint d;
+    uint e;
+    uint f;
+    uint g;
+} TxeRecord;
+
+uint unk0;
+uint recordCount;
+TxeRecord records[recordCount];

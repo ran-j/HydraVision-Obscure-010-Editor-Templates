@@ -1,0 +1,103 @@
+//------------------------------------------------
+//--- 010 Editor v14.0 Binary Template
+//
+//      File: 
+//   Authors: Ran-j
+//   Version: 1.0
+//   Purpose: Parse .noe files in Obscure 1
+//  Category: HydraVision
+// File Mask: *.noe
+//  ID Bytes: 
+//   History: 
+//------------------------------------------------
+//big WIP need more work
+BigEndian();
+
+typedef struct
+{
+    ubyte len;
+    if (len > 0) char str[len];
+} BeString;
+ 
+typedef struct {
+    uint32 FileSize;
+    uint32 Unk1;
+    uint16 Unk2;
+    BeString Name;
+} Header;
+
+int IsPrintable(ubyte c) {
+    return (c >= 32 && c <= 126);
+}
+
+int FindNextNode(int startPos) {
+    local int pos = startPos;
+    local int fsize = FileSize();
+    local int i;
+    local ubyte len;
+    local int valid;
+ 
+    while (pos < fsize - 16) {
+        if (ReadUShort(pos + 8) == 0) {
+            len = ReadUByte(pos + 10);
+            
+            //Ugly hack fix that later
+            if (len > 1 && len < 64) {
+                if (pos + 11 + len > fsize) {
+                    pos++;
+                    continue;
+                }
+
+                valid = 1;
+                for (i = 0; i < len; i++) {
+                    if (!IsPrintable(ReadUByte(pos + 11 + i))) {
+                        valid = 0;
+                        break;
+                    }
+                }
+                
+                if (valid) return pos;
+            }
+        }
+        pos++;
+    }
+    return -1;
+}
+
+typedef struct {
+    uint32 Type <format=hex>;
+    uint32 ID <format=hex>;
+    uint16 Unk;
+    BeString Name;
+    
+    Printf("Node: %s (Type: %X, ID: %X)\n", Name.str, Type, ID);
+    
+    local int currentEnd = FTell();
+    local int nextPos = FindNextNode(currentEnd);
+    
+    if (nextPos != -1) {
+        local int dataSize = nextPos - currentEnd;
+        if (dataSize > 0) {
+            ubyte Data[dataSize] <fgcolor=cLtGray>;
+        }
+    } else {
+        local int rest = FileSize() - currentEnd;
+        if (rest > 0) ubyte Data[rest] <fgcolor=cLtGray>;
+    }
+} Node;
+
+Header header;
+ 
+local int firstNode = FindNextNode(FTell());
+if (firstNode != -1 && firstNode > FTell()) {
+    ubyte RootData[firstNode - FTell()];
+}
+
+while (FTell() < FileSize()) { 
+    if (FileSize() - FTell() < 12) {
+        ubyte Padding[FileSize() - FTell()] <fgcolor=cGray>;
+        break;
+    }
+
+    Node node; 
+}

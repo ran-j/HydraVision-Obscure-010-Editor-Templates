@@ -1,0 +1,42 @@
+//------------------------------------------------
+//--- 010 Editor v13.0.1 Binary Template
+//
+//      File: 
+//   Authors: Ran-j
+//   Version: 1.0
+//   Purpose: Parse *.rth files in Obscure 1
+//  Category: HydraVision
+// File Mask: *.rth
+//  ID Bytes: 
+//   History: 
+//------------------------------------------------
+LittleEndian();
+
+struct Header {
+    uint32 unknown1;
+    uint32 unknown2; 
+    uint32 duration; // Number of frames?
+    uint32 unknown3;
+    uint32 unknown4;
+    uint32 entryCount;
+} header;
+
+typedef struct
+{
+    uint len;
+    char text[len];
+} BeString;
+
+struct Entry {
+    uint32 type;
+    uint32 unknownA;
+    uint32 unknownB;
+    BeString name;
+    if (type == 3) {
+        uint32 extraValue;
+    }
+};
+
+if (header.entryCount > 0) {
+    Entry entries[header.entryCount] <optimize=false>;
+}
